@@ -1,0 +1,102 @@
+#!/usr/bin/env perl
+
+use strict; use warnings; use v5.28.0;
+use Getopt::Long qw( :config posix_default no_ignore_case prefix_pattern=-- );
+use Sys::Hostname qw( hostname );
+use Time::HiRes ();
+use Fcntl qw( :flock );
+
+exit main();
+
+sub usage {
+  my ($fh, $msg, $exitval) = @_;
+  print $fh "$msg\n" if length( $msg );
+  print $fh <<'EOMSG';
+Usage: ssh_agent_share [OPTION]...
+  --help           print this help message
+  --[no-]-inherit  use/ignore SSH_AUTH_SOCK from environment
+  --lockwait W     seconds to wait for lock (default: 1.5)
+  --timeout T      default expiry time for all identities (3 days in secs)
+  --dir PATH       agent credential cache path (~/.ssh/.ssh_agent_share/)
+  --host HOST      override default hostname
+
+Example:
+  eval >/dev/null "$(ssh_agent_share --lockwait 3)"
+EOMSG
+  $exitval;
+}
+
+sub main {
+  my $inherit  = 1;
+  my $lockwait = 1.5;
+  my $timeout  = 260000;
+  my $dir = "$ENV{ HOME }/.ssh/.ssh_agent_share";
+  my $host;
+
+  usage( *STDERR, '', 1 ) unless GetOptions(
+    'help' => sub { usage( *STDOUT, '', 0 ); exit 0; }, 'inherit!' => \$inherit, 'lockwait=f' => \$lockwait, 'timeout=i' => \$timeout, 'dir=s' => \$dir, 'host=s' => \$host );
+  if( scalar @ARGV ) {
+    usage( *STDERR, qq(Error: unknown arguments (@ARGV)), 1 );
+  }
+  $host //= hostname;
+
+  my ($auth_sock, $agent_pid) = @ENV{ qw( SSH_AUTH_SOCK SSH_AGENT_PID ) };
+  exit 0 if $inherit and length( $auth_sock );
+
+  my $out = '';
+
+  -d $dir or mkdir $dir;
+  my $file = "$dir/.ssh_agent_share_$host";
+
+  my $lock = get_lock( $file, $lockwait );
+
+  $out = slurp( $file ) if -r $file;
+
+  $agent_pid = $out =~ s{.*SSH_AGENT_PID=([^;\n]*).*}{$1}sr;
+  $auth_sock = $out =~ s{.*SSH_AUTH_SOCK=([^;\n]*).*}{$1}sr;
+
+  if( defined( $auth_sock ) and -w( $auth_sock ) and defined( $agent_pid ) and kill( 0, $agent_pid ) ) {
+    print $out;
+    exit 0;
+  }
+
+  die $! unless defined( my $pid = fork );
+  if( $pid ) {  # parent: hold lock
+    waitpid $pid, 0;
+    exit 0;
+  } else {  # child: release lock, start agent
+    close $lock;
+    $out = qx( ssh-agent -t $timeout );
+    open( my $fh, '>', $file );
+    print $fh $out;
+    print $out;
+  }
+}
+
+sub slurp {
+  my ($file) = @_;
+  open( my $fh, '<', $file ) or die $!;
+  local $/;
+  <$fh>;
+}
+
+sub get_lock {
+  my ($file, $lockwait) = @_;
+  open( my $lock, '>>', $file ) or die $!;
+  my $alarm_exception = "flock timed out\n";
+  eval {
+    local $SIG{ ALRM } = sub { die $alarm_exception };
+    Time::HiRes::alarm $lockwait;
+    flock $lock, LOCK_EX;
+    Time::HiRes::alarm 0;
+  };
+  if( $@ ) {
+    if( $@ eq quotemeta( $alarm_exception ) ) {
+      die qq(couldn't lock $file);
+    } else {
+      die $@;
+    }
+  }
+  $lock;
+}
+
