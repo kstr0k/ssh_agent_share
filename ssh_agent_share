@@ -1,18 +1,20 @@
 #!/usr/bin/env perl
 
 use strict; use warnings; use v5.28.0;
+use File::Basename qw( basename );
 use File::Path qw( make_path );
 use Sys::Hostname qw( hostname );
 use Time::HiRes ();
 use Fcntl qw( :flock );
 
+my $Script = basename $0;
 exit main();
 
 sub usage {
   my ($fh, $msg, $exitval) = @_;
   print $fh "$msg\n" if length( $msg );
-  print $fh <<'EOMSG';
-Usage: ssh_agent_share [OPTION]...
+  print $fh <<EOMSG;
+Usage: $Script [OPTION]...
   --help           print this help message
   --[no-]-inherit  use/ignore SSH_AUTH_SOCK from environment
   --lockwait W     seconds to wait for lock (default: 1.5)
@@ -21,7 +23,7 @@ Usage: ssh_agent_share [OPTION]...
   --host HOST      override default hostname
 
 Example:
-  eval >/dev/null "$(ssh_agent_share --lockwait 3)"
+  eval >/dev/null "\$($Script --lockwait 3)"
 EOMSG
   $exitval;
 }
@@ -91,7 +93,7 @@ sub slurp {
 sub get_lock {
   my ($file, $lockwait) = @_;
   open( my $lock, '>>', $file ) or die $!;
-  my $alarm_exception = "flock timed out\n";
+  my $alarm_exception = "$Script: flock timed out\n";
   eval {
     local $SIG{ ALRM } = sub { die $alarm_exception };
     Time::HiRes::alarm $lockwait;
