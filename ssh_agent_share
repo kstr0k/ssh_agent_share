@@ -93,6 +93,7 @@ sub slurp {
 sub get_lock {
   my ($file, $lockwait) = @_;
   open( my $lock, '>>', $file ) or die $!;
+  return $lock if flock $lock, LOCK_EX | LOCK_NB;
   my $alarm_exception = "$Script: flock timed out\n";
   eval {
     local $SIG{ ALRM } = sub { die $alarm_exception };
