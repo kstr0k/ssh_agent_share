@@ -1,7 +1,7 @@
 #!/usr/bin/env perl
 
 use strict; use warnings; use v5.28.0;
-use Getopt::Long qw( :config posix_default no_ignore_case prefix_pattern=-- );
+use File::Path qw( make_path );
 use Sys::Hostname qw( hostname );
 use Time::HiRes ();
 use Fcntl qw( :flock );
@@ -27,28 +27,36 @@ EOMSG
 }
 
 sub main {
-  my $inherit  = 1;
-  my $lockwait = 1.5;
-  my $timeout  = 260000;
-  my $dir = "$ENV{ HOME }/.ssh/.ssh_agent_share";
-  my $host;
+  my %clio = (
+    inherit  => 1,
+    lockwait => 1.5,
+    timeout  => 260000,
+    dir => "$ENV{ HOME }/.ssh/.ssh_agent_share"
+  );
 
-  usage( *STDERR, '', 1 ) unless GetOptions(
-    'help' => sub { usage( *STDOUT, '', 0 ); exit 0; }, 'inherit!' => \$inherit, 'lockwait=f' => \$lockwait, 'timeout=i' => \$timeout, 'dir=s' => \$dir, 'host=s' => \$host );
-  if( scalar @ARGV ) {
-    usage( *STDERR, qq(Error: unknown arguments (@ARGV)), 1 );
+  while( scalar @ARGV ) {
+    my $arg = shift @ARGV;
+    return usage( *STDOUT, '', 0 ) if( $arg eq '--help' );
+    if( $arg =~ /^--(no(-)?)inherit$/ ) {
+      $clio{ inherit } = !( length $1 );
+    } elsif( $arg =~ qr{^--(lockwait|timeout|dir|host)} ) {
+      exit usage( *STDERR, "Missing value for $arg", 1 ) unless scalar @ARGV;
+      $clio{ $1 } = shift @ARGV;
+    } else {
+      exit usage( *STDERR, "Unknown argument $arg", 1 );
+    }
   }
-  $host //= hostname;
+  $clio{ host } //= hostname;
 
   my ($auth_sock, $agent_pid) = @ENV{ qw( SSH_AUTH_SOCK SSH_AGENT_PID ) };
-  exit 0 if $inherit and length( $auth_sock );
+  exit 0 if $clio{ inherit } and length( $auth_sock );
 
   my $out = '';
 
-  -d $dir or mkdir $dir;
-  my $file = "$dir/.ssh_agent_share_$host";
+  make_path $clio{ dir } unless -d $clio{ dir };
+  my $file = "$clio{ dir }/$clio{ host }.sh";
 
-  my $lock = get_lock( $file, $lockwait );
+  my $lock = get_lock( $file, $clio{ lockwait });
 
   $out = slurp( $file ) if -r $file;
 
@@ -66,7 +74,7 @@ sub main {
     exit 0;
   } else {  # child: release lock, start agent
     close $lock;
-    $out = qx( ssh-agent -t $timeout );
+    $out = qx( ssh-agent -t $clio{ timeout });
     open( my $fh, '>', $file );
     print $fh $out;
     print $out;
@@ -99,4 +107,3 @@ sub get_lock {
   }
   $lock;
 }
-
